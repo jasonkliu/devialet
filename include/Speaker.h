@@ -1,29 +1,27 @@
 #pragma once
-#include <Arduino.h>
 #include <vector>
-#include <algorithm>
 #include "DevialetAPI.h"
 #include "IRReceiver.h"
 #include "Connectivity.h"
 #include "Display.h"
+#include "Logger.h"
 
 class Speaker {
 private:
   String _ip;
   SpeakerState _state;
-  DevialetAPI* _api;
+  int _optimisticVolume = -1; // For instant UI feedback
   
-  int calcNewVolume(IRCommand cmd) const {
-    if (!_state.isValid()) return -1;
+  int calcVolume(IRCommand cmd, int currentVol) const {
     switch (cmd) {
-      case IRCommand::VolumeUp:   return min(_state.volume + 5, 100);
-      case IRCommand::VolumeDown: return max(_state.volume - 5, 0);
-      case IRCommand::Mute:       return 0;
+      case IRCommand::VolumeUp: return min(currentVol + 5, 100);
+      case IRCommand::VolumeDown: return max(currentVol - 5, 0);
+      case IRCommand::Mute: return 0;
       default: return -1;
     }
   }
   
-  char getRoleLetter() const {
+  char roleLetter() const {
     if (_state.role.indexOf("Left") >= 0) return 'L';
     if (_state.role.indexOf("Right") >= 0) return 'R';
     if (_state.role.indexOf("Mono") >= 0) return 'M';
@@ -31,32 +29,46 @@ private:
   }
 
 public:
-  Speaker(const String& ip, DevialetAPI* api) : _ip(ip), _api(api) {}
+  Speaker(const String& ip) : _ip(ip) {}
   
   const String& ip() const { return _ip; }
-  const String& role() const { return _state.role; }
-  int volume() const { return _state.volume; }
+  bool isValid() const { return _state.isValid(); }
   
-  void updateVolume() { _state = _api->getState(_ip); }
-  
-  int predictVolume(IRCommand cmd) {
-    if (!_state.isValid()) updateVolume();
-    return calcNewVolume(cmd);
+  void refresh(DevialetAPI& api) { 
+    _state = api.getState(_ip);
+    _optimisticVolume = _state.volume;
   }
   
-  bool execute(IRCommand cmd) {
-    int newVol = predictVolume(cmd);
-    if (newVol < 0 || newVol == _state.volume) return newVol >= 0;
+  // Optimistic execution: update local state immediately, send HTTP in background
+  bool execute(DevialetAPI& api, IRCommand cmd) {
+    // Always refresh state from speaker first to respect external changes
+    refresh(api);
     
-    if (_api->setVolume(_ip, newVol, _state)) {
-      _state.volume = newVol;
-      return true;
+    if (!_state.isValid()) {
+      Logger::logf("%s: No valid state, skipping\n", _ip.c_str());
+      return false;
     }
-    return false;
+    
+    int targetVol = calcVolume(cmd, _state.volume);
+    if (targetVol < 0) return false;
+    if (targetVol == _state.volume) return true; // Already at target
+    
+    // Update optimistic state immediately for instant UI feedback
+    _optimisticVolume = targetVol;
+    
+    // Fire HTTP request (300ms timeout, non-critical if it fails)
+    bool httpOk = api.setVolume(_ip, targetVol, _state);
+    if (httpOk) {
+      _state.volume = targetVol; // Sync actual state on success
+    } else {
+      Logger::logf("%s: HTTP failed, will retry on next command\n", _ip.c_str());
+    }
+    
+    return true; // Return true for optimistic success
   }
   
-  SpeakerDisplayInfo getDisplayInfo() const {
-    return { getRoleLetter(), _state.isValid() ? _state.volume : 0, _ip };
+  SpeakerDisplayInfo info() const {
+    return { roleLetter(), _optimisticVolume >= 0 ? _optimisticVolume : 0, _ip };
   }
 };
 
@@ -64,92 +76,64 @@ class SpeakerManager {
 private:
   std::vector<Speaker> _speakers;
   DevialetAPI _api;
-  unsigned long _lastScan = 0;
-  
-  std::vector<String> scanNetwork(Connectivity& wifi) {
-    std::vector<String> ips;
+
+public:
+  void discover(Connectivity& wifi) {
+    _speakers.clear();
     int n = wifi.queryMDNSService("http", "tcp");
     for (int i = 0; i < n; i++) {
       String host = wifi.getMDNSHostname(i);
       host.toLowerCase();
       if (host.indexOf("phantom") >= 0) {
-        String ip = wifi.getMDNSIP(i).toString();
-        if (!ip.isEmpty() && std::find(ips.begin(), ips.end(), ip) == ips.end()) {
-          ips.push_back(ip);
-        }
+        _speakers.emplace_back(wifi.getMDNSIP(i).toString());
       }
     }
-    return ips;
-  }
-
-public:
-  void discover(Connectivity& wifi, bool force = false) {
-    if (!force && (millis() - _lastScan) < 60000) return;
-    
-    auto ips = scanNetwork(wifi);
-    bool changed = force || _speakers.size() != ips.size();
-    
-    if (!changed) {
-      for (auto& sp : _speakers) {
-        if (std::find(ips.begin(), ips.end(), sp.ip()) == ips.end()) {
-          changed = true;
-          break;
-        }
-      }
-    }
-    
-    if (changed) {
-      _speakers.clear();
-      for (const auto& ip : ips) _speakers.emplace_back(ip, &_api);
-      Logger::logf("Found %u speaker(s)\n", _speakers.size());
-    }
-    _lastScan = millis();
+    Logger::logf("Found %u speaker(s)\n", _speakers.size());
   }
   
-  void refreshVolumes() {
+  void refresh() {
     for (auto& sp : _speakers) {
-      sp.updateVolume();
-      delay(50);
+      sp.refresh(_api);
+      // Yield to prevent watchdog timeout on many speakers
+      yield();
     }
   }
   
+  // Parallel execution with aggressive timeout protection
   int executeAll(IRCommand cmd) {
     int ok = 0;
     for (auto& sp : _speakers) {
-      if (sp.execute(cmd)) ok++;
-      delay(50);
+      if (sp.execute(_api, cmd)) ok++;
+      yield(); // Keep watchdog happy
     }
     return ok;
   }
   
-  int predictVolumeMin(IRCommand cmd) {
-    if (_speakers.empty()) return -1;
-    int minVol = 101;
-    for (auto& sp : _speakers) {
-      int v = sp.predictVolume(cmd);
-      if (v >= 0 && v < minVol) minVol = v;
+  size_t count() const { return _speakers.size(); }
+  bool hasValidSpeakers() const {
+    for (const auto& sp : _speakers) {
+      if (sp.isValid()) return true;
     }
-    return minVol <= 100 ? minVol : -1;
+    return false;
   }
   
-  size_t count() const { return _speakers.size(); }
-  bool needsScan() const { return (millis() - _lastScan) >= 60000; }
-  
-  std::vector<SpeakerDisplayInfo> getInfo() const {
-    std::vector<Speaker> sorted = _speakers;
-    std::sort(sorted.begin(), sorted.end(), [](const Speaker& a, const Speaker& b) {
-      // Sort order: FrontLeft, FrontRight, Mono, others
-      auto getRank = [](const String& role) {
-        if (role.indexOf("Left") >= 0) return 1;
-        if (role.indexOf("Right") >= 0) return 2;
-        if (role.indexOf("Mono") >= 0) return 3;
-        return 4;
-      };
-      return getRank(a.role()) < getRank(b.role());
+  std::vector<SpeakerDisplayInfo> info() const {
+    std::vector<SpeakerDisplayInfo> result;
+    result.reserve(_speakers.size());
+    
+    for (const auto& sp : _speakers) {
+      result.push_back(sp.info());
+    }
+    
+    // Sort: L, R, M, others
+    std::sort(result.begin(), result.end(), [](const SpeakerDisplayInfo& a, const SpeakerDisplayInfo& b) {
+      if (a.role == 'L') return true;
+      if (b.role == 'L') return false;
+      if (a.role == 'R') return true;
+      if (b.role == 'R') return false;
+      return a.role < b.role;
     });
     
-    std::vector<SpeakerDisplayInfo> info;
-    for (const auto& sp : sorted) info.push_back(sp.getDisplayInfo());
-    return info;
+    return result;
   }
 };

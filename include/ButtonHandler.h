@@ -11,16 +11,19 @@ private:
   SpeakerManager& _speakers;
   IRReceiver& _ir;
 
-  void handle(IRCommand cmd, const String& name) {
+  void handle(IRCommand cmd) {
     if (_speakers.count() == 0) {
-      _display.showCommand("No speakers");
+      _display.showMessage("No speakers");
       return;
     }
     
+    // Execute immediately (optimistic, max 300ms per speaker)
     int ok = _speakers.executeAll(cmd);
-    Logger::logf("%s: %d/%d OK\n", name.c_str(), ok, _speakers.count());
-    _speakers.refreshVolumes();
-    updateScreen();
+    
+    // Update display with new optimistic state
+    _display.showSpeakers(_speakers.info());
+    
+    Logger::logf("%s: %d/%d OK\n", IRReceiver::toString(cmd).c_str(), ok, _speakers.count());
   }
 
 public:
@@ -29,27 +32,22 @@ public:
   void checkButtons() {
     if (M5.BtnA.wasPressed()) {
       _display.recordActivity();
-      handle(IRCommand::VolumeUp, "VOL UP");
+      handle(IRCommand::VolumeUp);
     } else if (M5.BtnB.wasPressed()) {
       _display.recordActivity();
-      handle(IRCommand::VolumeDown, "VOL DOWN");
+      handle(IRCommand::VolumeDown);
     }
   }
   
   void checkIR() {
-    String debug;
-    IRCommand cmd = _ir.checkForCommand(&debug);
-    
+    IRCommand cmd = _ir.check();
     if (cmd != IRCommand::None) {
       _display.recordActivity();
-      handle(cmd, IRReceiver::commandToString(cmd));
-    } else if (!debug.isEmpty()) {
-      _display.recordActivity();
-      _display.showCommand("UNKNOWN\n" + debug, true);
+      handle(cmd);
     }
   }
   
   void updateScreen() {
-    _display.showMainScreen(_speakers.getInfo());
+    _display.showSpeakers(_speakers.info());
   }
 };
