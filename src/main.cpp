@@ -18,32 +18,28 @@ ButtonHandler buttons(display, speakers, ir);
 
 void setup() {
   logger.begin(115200);
-  delay(100); // Let serial stabilize
-  Logger::logln("\n\n=== DEVIALET IR STARTING ===");
-  Logger::logf("IR Pin: %d\n", IR_PIN);
+  delay(100);
   
+  Logger::info("Devialet IR Controller");
   display.begin();
   display.showMessage("Devialet IR\nStarting...");
-  
-  Logger::logln("Initializing IR receiver...");
   ir.begin();
-  Logger::logln("IR receiver ready - point remote and press buttons");
   
   display.showMessage("WiFi\nConnecting...");
-  wifi.connectBlocking(); // Blocking is OK during setup
+  wifi.connectBlocking();
   
   if (wifi.isConnected()) {
-    display.showMessage("WiFi OK\nFinding speakers...");
+    display.showMessage("Discovering\nspeakers...");
     speakers.discover(wifi);
     speakers.refresh();
     
     if (speakers.hasValidSpeakers()) {
-      Logger::logln("Ready");
+      Logger::info("Ready");
     } else {
-      Logger::logln("Warning: No valid speakers found");
+      Logger::error("No valid speakers");
     }
   } else {
-    display.showMessage("WiFi failed\nContinuing anyway...");
+    display.showMessage("WiFi failed\nContinuing...");
     delay(2000);
   }
   
@@ -52,20 +48,13 @@ void setup() {
 }
 
 void loop() {
-  // Priority 1: Process IR input (critical path, lowest latency)
   buttons.checkIR();
-  
-  // Priority 2: Process physical buttons
   buttons.checkButtons();
-  
-  // Priority 3: Update display (can tolerate latency)
   display.update();
   
-  // Priority 4: Handle WiFi reconnection (non-blocking, throttled)
   if (!wifi.isConnected()) {
-    wifi.connect(); // Non-blocking, throttled to 5s intervals
+    wifi.connect();
   }
   
-  // Minimal loop delay for maximum IR responsiveness
   delay(10);
 }

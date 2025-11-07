@@ -10,13 +10,15 @@ class Speaker {
 private:
   String _ip;
   SpeakerState _state;
-  int _optimisticVolume = -1; // For instant UI feedback
+  int _optimisticVolume = -1;
+  int _preMuteVolume = -1;
   
   int calcVolume(IRCommand cmd, int currentVol) const {
     switch (cmd) {
       case IRCommand::VolumeUp: return min(currentVol + 5, 100);
       case IRCommand::VolumeDown: return max(currentVol - 5, 0);
-      case IRCommand::Mute: return 0;
+      case IRCommand::Mute: 
+        return (currentVol == 0 && _preMuteVolume > 0) ? _preMuteVolume : 0;
       default: return -1;
     }
   }
@@ -39,32 +41,27 @@ public:
     _optimisticVolume = _state.volume;
   }
   
-  // Optimistic execution: update local state immediately, send HTTP in background
   bool execute(DevialetAPI& api, IRCommand cmd) {
-    // Always refresh state from speaker first to respect external changes
     refresh(api);
-    
-    if (!_state.isValid()) {
-      Logger::logf("%s: No valid state, skipping\n", _ip.c_str());
-      return false;
-    }
+    if (!_state.isValid()) return false;
     
     int targetVol = calcVolume(cmd, _state.volume);
     if (targetVol < 0) return false;
-    if (targetVol == _state.volume) return true; // Already at target
+    if (targetVol == _state.volume) return true;
     
-    // Update optimistic state immediately for instant UI feedback
-    _optimisticVolume = targetVol;
-    
-    // Fire HTTP request (300ms timeout, non-critical if it fails)
-    bool httpOk = api.setVolume(_ip, targetVol, _state);
-    if (httpOk) {
-      _state.volume = targetVol; // Sync actual state on success
-    } else {
-      Logger::logf("%s: HTTP failed, will retry on next command\n", _ip.c_str());
+    // Save volume before muting
+    if (cmd == IRCommand::Mute && _state.volume > 0) {
+      _preMuteVolume = _state.volume;
     }
     
-    return true; // Return true for optimistic success
+    _optimisticVolume = targetVol;
+    
+    bool ok = api.setVolume(_ip, targetVol, _state);
+    if (ok) {
+      refresh(api);  // Verify actual state after POST
+    }
+    
+    return true;
   }
   
   SpeakerDisplayInfo info() const {
@@ -94,22 +91,21 @@ public:
   void refresh() {
     for (auto& sp : _speakers) {
       sp.refresh(_api);
-      // Yield to prevent watchdog timeout on many speakers
       yield();
     }
   }
   
-  // Parallel execution with aggressive timeout protection
   int executeAll(IRCommand cmd) {
     int ok = 0;
     for (auto& sp : _speakers) {
       if (sp.execute(_api, cmd)) ok++;
-      yield(); // Keep watchdog happy
+      yield();
     }
     return ok;
   }
   
   size_t count() const { return _speakers.size(); }
+  
   bool hasValidSpeakers() const {
     for (const auto& sp : _speakers) {
       if (sp.isValid()) return true;
@@ -125,7 +121,6 @@ public:
       result.push_back(sp.info());
     }
     
-    // Sort: L, R, M, others
     std::sort(result.begin(), result.end(), [](const SpeakerDisplayInfo& a, const SpeakerDisplayInfo& b) {
       if (a.role == 'L') return true;
       if (b.role == 'L') return false;

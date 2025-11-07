@@ -3,7 +3,6 @@
 #include "Display.h"
 #include "Speaker.h"
 #include "IRReceiver.h"
-#include "Logger.h"
 
 class ButtonHandler {
 private:
@@ -17,13 +16,8 @@ private:
       return;
     }
     
-    // Execute immediately (optimistic, max 300ms per speaker)
-    int ok = _speakers.executeAll(cmd);
-    
-    // Update display with new optimistic state
+    _speakers.executeAll(cmd);
     _display.showSpeakers(_speakers.info());
-    
-    Logger::logf("%s: %d/%d OK\n", IRReceiver::toString(cmd).c_str(), ok, _speakers.count());
   }
 
 public:

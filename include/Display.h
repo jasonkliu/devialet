@@ -65,12 +65,7 @@ public:
     for (const auto& sp : speakers) {
       M5.Display.setTextSize(4);
       M5.Display.setTextColor(volumeColor(sp.volume));
-      M5.Display.printf("%c: %d%%", sp.role, sp.volume);
-      M5.Display.setTextSize(1);
-      M5.Display.setTextColor(TFT_DARKGREY);
-      M5.Display.printf(" %s", sp.ip.c_str());
-      M5.Display.setTextSize(4);
-      M5.Display.println();
+      M5.Display.printf("%c: %d%%\n", sp.role, sp.volume);
     }
   }
   

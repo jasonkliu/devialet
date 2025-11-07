@@ -16,25 +16,16 @@ public:
   Connectivity(const char* ssid, const char* pass, const char* host = "m5-phantom")
     : _ssid(ssid), _pass(pass), _host(host) {}
   
-  // Non-blocking WiFi connection with async behavior
   void connect() {
     if (WiFi.status() == WL_CONNECTED) return;
-
-    unsigned long now = millis();
-    if (now - _lastConnectAttempt < RECONNECT_INTERVAL_MS) {
-      return; // Throttle reconnection attempts
-    }
+    if (millis() - _lastConnectAttempt < RECONNECT_INTERVAL_MS) return;
     
-    _lastConnectAttempt = now;
-    
-    if (WiFi.status() == WL_IDLE_STATUS || WiFi.status() == WL_DISCONNECTED) {
-      WiFi.mode(WIFI_STA);
-      WiFi.begin(_ssid, _pass);
-      Logger::logf("WiFi connecting to %s\n", _ssid);
-    }
+    _lastConnectAttempt = millis();
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(_ssid, _pass);
+    Logger::logf("WiFi connecting to %s\n", _ssid);
   }
   
-  // Non-blocking connection check for setup phase only
   bool connectBlocking(uint16_t maxAttempts = 40) {
     if (WiFi.status() == WL_CONNECTED) return true;
 
@@ -46,23 +37,23 @@ public:
       delay(250);
     }
 
-    if (WiFi.status() == WL_CONNECTED) {
+    bool connected = WiFi.status() == WL_CONNECTED;
+    if (connected) {
       Logger::logf("Connected: %s\n", WiFi.localIP().toString().c_str());
-      return true;
+    } else {
+      Logger::error("WiFi failed");
     }
-    
-    Logger::logln("WiFi failed");
-    return false;
+    return connected;
   }
   
-  bool isConnected() { return WiFi.status() == WL_CONNECTED; }
+  bool isConnected() const { return WiFi.status() == WL_CONNECTED; }
   
   void ensureMDNS() {
     if (!isConnected() || _mdns) return;
     if (MDNS.begin(_host)) {
       _mdns = true;
       MDNS.addService("http", "tcp", 80);
-      Logger::logln("mDNS started");
+      Logger::info("mDNS started");
     }
   }
   
@@ -71,6 +62,6 @@ public:
     return MDNS.queryService(service, protocol);
   }
   
-  String getMDNSHostname(int i) { return MDNS.hostname(i); }
-  IPAddress getMDNSIP(int i) { return MDNS.IP(i); }
+  String getMDNSHostname(int i) const { return MDNS.hostname(i); }
+  IPAddress getMDNSIP(int i) const { return MDNS.IP(i); }
 };
