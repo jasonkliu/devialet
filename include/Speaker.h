@@ -15,8 +15,8 @@ private:
   
   int calcVolume(IRCommand cmd, int currentVol) const {
     switch (cmd) {
-      case IRCommand::VolumeUp: return min(currentVol + 5, 100);
-      case IRCommand::VolumeDown: return max(currentVol - 5, 0);
+      case IRCommand::VolumeUp: return min(currentVol + 2, 100);
+      case IRCommand::VolumeDown: return max(currentVol - 2, 0);
       case IRCommand::Mute: 
         return (currentVol == 0 && _preMuteVolume > 0) ? _preMuteVolume : 0;
       default: return -1;
