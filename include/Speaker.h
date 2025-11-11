@@ -120,7 +120,7 @@ public:
       if (sp.execute(_api, cmd)) ok++;
       yield();
     }
-    if (SYNC_SPEAKER_VOLUMES && ok > 0 && cmd != IRCommand::Mute) {
+    if (SYNC_SPEAKER_VOLUMES && ok > 0 && cmd != IRCommand::Mute && !_speakers.empty()) {
       int minVol = _speakers[0].info().volume;
       for (const auto& sp : _speakers) minVol = min(minVol, sp.info().volume);
       for (auto& sp : _speakers) { sp.setVolume(_api, minVol); yield(); }

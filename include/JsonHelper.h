@@ -6,8 +6,9 @@ class JsonHelper {
 public:
   static JsonDocument parse(const String& json) {
     JsonDocument doc;
-    if (deserializeJson(doc, json)) {
-      Logger::error("JSON parse failed");
+    DeserializationError error = deserializeJson(doc, json);
+    if (error) {
+      Logger::logf("✗ JSON parse failed: %s\n", error.c_str());
     }
     return doc;
   }
